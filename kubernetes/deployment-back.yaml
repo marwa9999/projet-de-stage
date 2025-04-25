@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: association-back
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: association-back
+  template:
+    metadata:
+      labels:
+        app: association-back
+    spec:
+      containers:
+        - name: association-back
+          image: marwa9999/association-back:latest
+          ports:
+            - containerPort: 8080
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: association-back
+spec:
+  selector:
+    app: association-back
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+      nodePort: 30080
+  type: NodePort

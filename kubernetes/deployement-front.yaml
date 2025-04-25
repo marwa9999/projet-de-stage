@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: association-front-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: association-front
+  template:
+    metadata:
+      labels:
+        app: association-front
+    spec:
+      containers:
+        - name: association-front-container
+          image: marwa9999/association-front:latest
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: association-front-service
+spec:
+  selector:
+    app: association-front
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: LoadBalancer

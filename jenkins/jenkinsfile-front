@@ -1,0 +1,84 @@
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'NodeJs'
+    }
+
+    environment {
+        GIT_REPO_FRONT = 'https://gitlab.dpc.com.tn/marwa.benmansour/association_front.git'
+        GIT_CREDENTIALS_ID = 'gitlab-marwa'
+        DOCKER_IMAGE = 'marwa9999/association-front'
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
+    }
+
+    stages {
+        stage('Checkout Frontend Code') {
+            steps {
+                script {
+                    checkout([$class: 'GitSCM',
+                        branches: [[name: '*/develop']],
+                        userRemoteConfigs: [[
+                            credentialsId: env.GIT_CREDENTIALS_ID,
+                            url: env.GIT_REPO_FRONT
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Install & Build Angular App') {
+            steps {
+                sh 'npm install --force'
+                sh 'npm run build'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    dockerImage = docker.build("${DOCKER_IMAGE}:${env.BUILD_NUMBER}")
+                }
+            }
+        }
+
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', "${DOCKER_CREDENTIALS_ID}") {
+                        dockerImage.push()
+                        dockerImage.push("latest")
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to MicroK8s') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig-microk8s', variable: 'KUBECONFIG_FILE')]) {
+                    sh '''
+                        echo " Déploiement du frontend via kubeconfig..."
+                        export KUBECONFIG=$KUBECONFIG_FILE
+                        kubectl apply -f deployment.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Cleanup Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+    }
+
+    post {
+        success {
+            echo " Le pipeline frontend s’est terminé avec succès ! L’image ${DOCKER_IMAGE} est poussée et déployée."
+        }
+        failure {
+            echo " Échec du pipeline frontend. Vérifiez les logs."
+        }
+    }
+}
+

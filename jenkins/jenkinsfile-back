@@ -1,0 +1,161 @@
+pipeline {
+    agent any
+
+    tools { 
+        jdk 'JDK11'
+        maven 'Maven'
+    }
+
+    environment {
+        // GitLab
+        GIT_REPO_URL = 'https://gitlab.dpc.com.tn/marwa.benmansour/association_back.git'
+        GIT_CREDENTIALS_ID = 'gitlab-marwa'
+
+        // SonarQube
+        SONAR_SERVER = 'SonarQube'
+        SONAR_SCANNER = 'SonarQube Scanner'
+        SONAR_TOKEN = credentials('sonarqube-token')
+
+        // Nexus
+        NEXUS_URL = '192.168.8.147:8081'
+        NEXUS_CREDENTIALS_ID = 'nexus-admin'
+        NEXUS_REPOSITORY = 'association'
+        GROUP_ID = 'com.dpc'
+        ARTIFACT_ID = 'association'
+        VERSION = '0.0.1-SNAPSHOT'
+
+        // Docker Hub
+        DOCKER_IMAGE = 'marwa9999/association-back'
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                script {
+                    checkout([$class: 'GitSCM',
+                        branches: [[name: '*/develop']],
+                        userRemoteConfigs: [[
+                            credentialsId: env.GIT_CREDENTIALS_ID,
+                            url: env.GIT_REPO_URL
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+
+        stage('Dependency-Check') {
+            steps {
+                script {
+                    dependencyCheck additionalArguments: '--format XML --format HTML --scan target/ --disableAssembly', 
+                                    odcInstallation: 'Dependency-Check'
+                }
+            }
+        }
+
+        stage('Publish Dependency-Check Report') {
+            steps {
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+
+        stage('Analysis - SonarQube') {
+            steps {
+                script {
+                    withSonarQubeEnv(env.SONAR_SERVER) {
+                        sh """
+                        mvn sonar:sonar \
+                            -Dsonar.projectKey=association_back \
+                            -Dsonar.host.url=http://192.168.8.147:9000 \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Publish .jar to Nexus') {
+            steps {
+                script {
+                    nexusArtifactUploader artifacts: [[
+                        artifactId: env.ARTIFACT_ID, 
+                        classifier: '', 
+                        file: "target/${env.ARTIFACT_ID}-${env.VERSION}.jar", 
+                        type: 'jar']], 
+                        credentialsId: env.NEXUS_CREDENTIALS_ID, 
+                        groupId: env.GROUP_ID, 
+                        nexusUrl: env.NEXUS_URL, 
+                        nexusVersion: 'nexus3', 
+                        protocol: 'http', 
+                        repository: env.NEXUS_REPOSITORY, 
+                        version: env.VERSION
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    dockerImage = docker.build("${DOCKER_IMAGE}:${env.BUILD_NUMBER}")
+                }
+            }
+        }
+
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', "${DOCKER_CREDENTIALS_ID}") {
+                        dockerImage.push("${env.BUILD_NUMBER}")
+                        dockerImage.push("latest")
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to MicroK8s') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig-microk8s', variable: 'KUBECONFIG_FILE')]) {
+                    sh '''
+                        echo "Déploiement via kubeconfig..."
+                        which kubectl || (echo " kubectl n’est pas installé sur cette machine Jenkins !" && exit 1)
+                        export KUBECONFIG=$KUBECONFIG_FILE
+                        kubectl apply -f deployment.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Cleanup Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+    }
+
+    post {
+        success {
+            echo ' Pipeline exécutée avec succès ! '
+        }
+        unstable {
+            echo ' Pipeline terminée avec des avertissements. Vérifiez les logs.'
+        }
+        failure {
+            echo ' Echec du pipeline. Vérifiez les logs pour plus de détails.'
+        }
+    }
+}
+
